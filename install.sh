@@ -18,6 +18,7 @@ TERMINAL_CERT_SAN="${TERMINAL_CERT_SAN:-}"
 CLOUDPANEL_ROOT="${CLOUDPANEL_ROOT:-/home/clp/htdocs/app/files}"
 CLOUDPANEL_TEMPLATE_DIR="${CLOUDPANEL_TEMPLATE_DIR:-$CLOUDPANEL_ROOT/templates/Frontend/Site}"
 CLOUDPANEL_USERS_TEMPLATE="${CLOUDPANEL_USERS_TEMPLATE:-$CLOUDPANEL_TEMPLATE_DIR/users.html.twig}"
+CLOUDPANEL_USERS_TEMPLATE_BACKUP="${CLOUDPANEL_USERS_TEMPLATE_BACKUP:-$CLOUDPANEL_USERS_TEMPLATE.cloudpanel-terminal-helper.bak}"
 CLOUDPANEL_CACHE_DIR="${CLOUDPANEL_CACHE_DIR:-$CLOUDPANEL_ROOT/var/cache}"
 CLOUDPANEL_FILE_OWNER="${CLOUDPANEL_FILE_OWNER:-clp:clp}"
 CLOUDPANEL_FILE_MODE="${CLOUDPANEL_FILE_MODE:-770}"
@@ -215,11 +216,21 @@ install_template() {
         exit 1
     fi
 
-    local backup
-    backup="${CLOUDPANEL_USERS_TEMPLATE}.$(date +%Y%m%d%H%M%S).bak"
-    cp "$CLOUDPANEL_USERS_TEMPLATE" "$backup"
-    chown "$CLOUDPANEL_FILE_OWNER" "$backup"
-    chmod "$CLOUDPANEL_FILE_MODE" "$backup"
+    cp "$CLOUDPANEL_USERS_TEMPLATE" "$CLOUDPANEL_USERS_TEMPLATE_BACKUP"
+
+    node - "$CLOUDPANEL_USERS_TEMPLATE_BACKUP" <<'JS'
+const fs = require('fs');
+
+const path = process.argv[2];
+let text = fs.readFileSync(path, 'utf8');
+const includeLinePattern = /^[ \t]*\{\{\s*include\('Frontend\/Site\/terminal\.html\.twig'.*\}\}[ \t]*(?:\r?\n)?/gm;
+
+text = text.replace(includeLinePattern, '');
+fs.writeFileSync(path, text);
+JS
+
+    chown "$CLOUDPANEL_FILE_OWNER" "$CLOUDPANEL_USERS_TEMPLATE_BACKUP"
+    chmod "$CLOUDPANEL_FILE_MODE" "$CLOUDPANEL_USERS_TEMPLATE_BACKUP"
 
     node - "$CLOUDPANEL_USERS_TEMPLATE" "$TERMINAL_PORT" <<'JS'
 const fs = require('fs');
@@ -291,7 +302,7 @@ function findFtpCardEnd() {
     let selected = null;
 
     while ((match = cardPattern.exec(text)) !== null) {
-    if (match.index < siteContentStart) continue;
+        if (match.index < siteContentStart) continue;
         if (match.index > markerIndex) break;
 
         selected = match;
@@ -323,7 +334,7 @@ JS
     chown "$CLOUDPANEL_FILE_OWNER" "$CLOUDPANEL_USERS_TEMPLATE"
     chmod "$CLOUDPANEL_FILE_MODE" "$CLOUDPANEL_USERS_TEMPLATE"
 
-    log "Backup created: $backup"
+    log "Restorable backup updated: $CLOUDPANEL_USERS_TEMPLATE_BACKUP"
 }
 
 configure_firewall() {

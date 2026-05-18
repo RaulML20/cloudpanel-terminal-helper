@@ -102,6 +102,26 @@ TERMINAL_PUBLIC_HOST="YOUR_VPS_IP_OR_DOMAIN" \
   bash install.sh
 ```
 
+## Uninstall
+
+The repository includes an uninstaller for a full cleanup of this helper:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/RaulML20/cloudpanel-terminal-helper/main/uninstall.sh | bash
+```
+
+The uninstaller:
+
+- Stops and removes the PM2 process named `cloudpanel-terminal-helper`.
+- Removes the marked PM2 resurrection block from root's crontab.
+- Removes the UFW rule for the configured terminal port when it can identify it from `/opt/cloudpanel-terminal-helper/.env`.
+- Restores `users.html.twig` from the helper backup when available, then removes that backup file.
+- Removes `/home/clp/htdocs/app/files/templates/Frontend/Site/terminal.html.twig`.
+- Clears the CloudPanel cache and restarts `clp-php-fpm` and `clp-nginx`.
+- Removes `/opt/cloudpanel-terminal-helper`.
+
+It does not uninstall Node.js, nvm, npm, or PM2 globally because those tools may be used by other applications on the server.
+
 ## What The Installer Changes
 
 The installer performs the following actions:
@@ -109,12 +129,12 @@ The installer performs the following actions:
 - Verifies that CloudPanel appears to be installed by checking `clp-php-fpm.service`, `clp-nginx.service`, and `/home/clp/htdocs/app/files`.
 - Installs Node.js 24 with nvm using the official nvm installer.
 - Installs PM2 globally with npm.
-- Downloads this helper from GitHub into `/opt/cloudpanel-terminal-helper`.
+- Downloads this helper from GitHub into `/opt/cloudpanel-terminal-helper`; if that directory already exists, it is moved to a timestamped backup before installing a fresh copy.
 - Installs the npm dependencies from this repository.
 - Writes `/opt/cloudpanel-terminal-helper/.env` with runtime configuration.
 - Creates a 5-year self-signed certificate in `/opt/cloudpanel-terminal-helper/ssl` if one does not already exist, using `TERMINAL_CERT_CN` and `TERMINAL_CERT_SAN`.
 - Copies `terminal.html.twig` into `/home/clp/htdocs/app/files/templates/Frontend/Site/terminal.html.twig`; the helper serves local `@xterm/xterm` assets from npm under `/assets/...` instead of loading them from a CDN.
-- Creates a timestamped backup of `users.html.twig` in the same directory before modifying it.
+- Creates or overwrites a single restorable backup at `/home/clp/htdocs/app/files/templates/Frontend/Site/users.html.twig.cloudpanel-terminal-helper.bak` before modifying `users.html.twig`. The backup has the helper include removed so it can be used by the uninstaller.
 - Inserts or updates a Twig include in `users.html.twig`, directly after the FTP users `card card-table` block inside `site-content`, so the helper UI appears as a sibling card in the expected site view position.
 - Sets `terminal.html.twig`, the modified `users.html.twig`, and the backup file to owner `clp:clp` and mode `770` by default.
 - Adds a UFW allow rule for the configured port and authorized IPs only when UFW is already installed.
@@ -140,7 +160,7 @@ The gateway uses a self-signed certificate by default. Because the browser conne
 
 Site path detection currently expects the CloudPanel site directory to match the first label of the domain under `/home`, for example `example.com` -> `/home/example`.
 
-CloudPanel updates may replace or modify `users.html.twig`. If the terminal UI disappears after a CloudPanel update, run this installer again with the same variables so it can copy the template again, create a fresh backup, and reinsert the Twig include in the expected position.
+CloudPanel updates may replace or modify `users.html.twig`. If the terminal UI disappears after a CloudPanel update, run this installer again with the same variables so it can copy the template again, refresh the restorable backup, and reinsert the Twig include in the expected position.
 
 Re-running the installer is supported. It moves the existing `/opt/cloudpanel-terminal-helper` directory to a timestamped backup, installs a fresh copy, rewrites `.env`, restarts PM2, and reapplies the template changes. Because the self-signed certificate is stored inside `/opt/cloudpanel-terminal-helper/ssl`, a reinstall may generate a new certificate and the browser may ask you to trust it again.
 
