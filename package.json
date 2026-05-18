@@ -1,0 +1,20 @@
+{
+    "name": "cloudpanel-terminal-helper",
+    "version": "1.0.0",
+    "private": true,
+    "description": "Unofficial external terminal helper for CloudPanel environments using WebSocket and node-pty",
+    "main": "server.js",
+    "scripts": {
+        "start": "node server.js"
+    },
+    "dependencies": {
+        "@xterm/addon-fit": "^0.10.0",
+        "@xterm/xterm": "^5.5.0",
+        "dotenv": "^16.4.7",
+        "node-pty": "^1.0.0",
+        "ws": "^8.20.1"
+    },
+    "engines": {
+        "node": ">=18"
+    }
+}

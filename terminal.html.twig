@@ -1,0 +1,293 @@
+{# templates/Frontend/Site/Partial/ssh-terminal.html.twig #}
+
+<div class="card mt-4 ssh-terminal-card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <div>
+            {% trans %}Terminal{% endtrans %}
+        </div>
+
+        <div class="d-flex align-items-center gap-2">
+        <span id="ssh-terminal-status" class="ssh-terminal-status is-disconnected">
+            <span class="ssh-terminal-status-dot"></span>
+            <span id="ssh-terminal-status-text">{% trans %}Disconnected{% endtrans %}</span>
+        </span>
+
+        <button id="ssh-terminal-connect" type="button" class="btn btn-sm btn-primary">
+            {% trans %}Connect{% endtrans %}
+        </button>
+
+        <button id="ssh-terminal-disconnect" type="button" class="btn btn-sm btn-secondary" disabled>
+            {% trans %}Disconnect{% endtrans %}
+        </button>
+        </div>
+    </div>
+
+    <div class="card-body card-body-no-padding">
+        <div class="ssh-terminal-container">
+        <div id="ssh-terminal"></div>
+        </div>
+
+        <div class="ssh-terminal-footer">
+        {% trans %}Terminal session for{% endtrans %}
+        <strong>{{ site.domainName|default(site.domain|default('unknown')) }}</strong>
+        </div>
+    </div>
+</div>
+
+<style>
+    .ssh-terminal-card {
+        overflow: hidden;
+    }
+
+    .ssh-terminal-container {
+        height: 520px;
+        background: #000;
+        padding: 8px;
+    }
+
+    #ssh-terminal {
+        width: 100%;
+        height: 100%;
+    }
+
+    .ssh-terminal-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: #adb5bd;
+    }
+
+    .ssh-terminal-status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #6c757d;
+    }
+
+    .ssh-terminal-status.is-connected .ssh-terminal-status-dot {
+        background: #28a745;
+    }
+
+    .ssh-terminal-status.is-connecting .ssh-terminal-status-dot {
+        background: #ffc107;
+    }
+
+    .ssh-terminal-status.is-disconnected .ssh-terminal-status-dot {
+        background: #dc3545;
+    }
+
+    .ssh-terminal-footer {
+        padding: 10px 16px;
+        border-top: 1px solid #343a40;
+        font-size: 12px;
+        color: #adb5bd;
+    }
+
+    .xterm {
+        height: 100%;
+    }
+
+    .xterm-viewport {
+        overflow-y: auto;
+    }
+</style>
+
+<script>
+    const terminalPort = '{{ terminalPort|default(7867)|e('js') }}';
+    const assetProtocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
+
+    function buildAssetUrl(path) {
+        return assetProtocol + '//' + window.location.hostname + ':' + terminalPort + path;
+    }
+
+    function loadStyle(path) {
+        const link = document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = buildAssetUrl(path);
+        document.head.appendChild(link);
+    }
+
+    function loadScript(path) {
+        return new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = buildAssetUrl(path);
+            script.onload = resolve;
+            script.onerror = reject;
+            document.head.appendChild(script);
+        });
+    }
+
+    async function bootTerminal() {
+        loadStyle('/assets/xterm.css');
+        await loadScript('/assets/xterm.js');
+        await loadScript('/assets/addon-fit.js');
+
+        const TerminalConstructor = window.Terminal;
+        const FitAddonConstructor = window.FitAddon && window.FitAddon.FitAddon ? window.FitAddon.FitAddon : window.FitAddon;
+
+    const terminalElement = document.getElementById('ssh-terminal');
+    const connectButton = document.getElementById('ssh-terminal-connect');
+    const disconnectButton = document.getElementById('ssh-terminal-disconnect');
+    const statusElement = document.getElementById('ssh-terminal-status');
+    const statusTextElement = document.getElementById('ssh-terminal-status-text');
+
+    const siteId = '{{ site.id|default('')|e('js') }}';
+    const siteName = '{{ site.domainName|default(site.domain|default('unknown'))|e('js') }}';
+    const siteUser = '{{ site.user|default(site.siteUser|default(''))|e('js') }}';
+
+    let socket = null;
+
+    const terminal = new TerminalConstructor({
+            cursorBlink: true,
+            convertEol: true,
+            fontFamily: 'Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+            fontSize: 13,
+            scrollback: 5000,
+            theme: {
+            background: '#000000',
+            foreground: '#f8f8f2'
+        }
+    });
+
+    const fitAddon = new FitAddonConstructor();
+
+    terminal.loadAddon(fitAddon);
+    terminal.open(terminalElement);
+
+    setTimeout(() => {
+        fitAddon.fit();
+    }, 100);
+
+    terminal.writeln('Web Terminal');
+    terminal.writeln('Domain: ' + siteName);
+
+    if(siteUser) terminal.writeln('Site user: ' + siteUser);
+
+    terminal.writeln('');
+    terminal.writeln('Click "Connect" to start a terminal session.');
+    terminal.writeln('');
+
+    function setStatus(status, label) {
+        statusElement.classList.remove('is-connected', 'is-connecting', 'is-disconnected');
+        statusElement.classList.add('is-' + status);
+        statusTextElement.textContent = label;
+    }
+
+    function buildWebSocketUrl() {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+
+        const params = new URLSearchParams({
+            site: siteName
+        });
+
+        return protocol + '//' + window.location.hostname + ':' + terminalPort + '?' + params.toString();
+    }
+
+    function connectTerminal() {
+        if(socket && socket.readyState === WebSocket.OPEN) return;
+
+        const wsUrl = buildWebSocketUrl();
+
+        terminal.writeln('[connecting]');
+        setStatus('connecting', 'Connecting');
+
+        connectButton.disabled = true;
+        disconnectButton.disabled = false;
+
+        socket = new WebSocket(wsUrl);
+
+        socket.addEventListener('open', () => {
+        setStatus('connected', 'Connected');
+        terminal.writeln('[connected]');
+        terminal.focus();
+
+        socket.send(JSON.stringify({
+                type: 'resize',
+                cols: terminal.cols,
+                rows: terminal.rows
+            }));
+        });
+
+        socket.addEventListener('message', (event) => {
+            try {
+                const message = JSON.parse(event.data);
+
+                if(message.type === 'output') {
+                    terminal.write(message.data);
+                    return;
+                }
+
+                if(message.type === 'error') {
+                    terminal.writeln('\r\n[error] ' + message.message);
+                    return;
+                }
+            }catch (error) {
+                terminal.write(event.data);
+            }
+        });
+
+        socket.addEventListener('close', () => {
+            setStatus('disconnected', 'Disconnected');
+            connectButton.disabled = false;
+            disconnectButton.disabled = true;
+            terminal.writeln('\r\n[disconnected]');
+        });
+
+        socket.addEventListener('error', () => {
+            setStatus('disconnected', 'Connection error');
+            terminal.writeln('\r\n[connection error]');
+        });
+    }
+
+    function disconnectTerminal() {
+        if(!socket) return;
+
+        terminal.writeln('\r\n[disconnecting]');
+        socket.close();
+        socket = null;
+
+        setStatus('disconnected', 'Disconnected');
+        connectButton.disabled = false;
+        disconnectButton.disabled = true;
+    }
+
+    terminal.onData((data) => {
+        if (!socket || socket.readyState !== WebSocket.OPEN) return;
+
+        socket.send(JSON.stringify({
+            type: 'input',
+            data: data
+        }));
+    });
+
+    terminal.onResize((size) => {
+        if(!socket || socket.readyState !== WebSocket.OPEN) return;
+
+        socket.send(JSON.stringify({
+            type: 'resize',
+            cols: size.cols,
+            rows: size.rows
+        }));
+    });
+
+    window.addEventListener('resize', () => {
+        fitAddon.fit();
+    });
+
+    connectButton.addEventListener('click', connectTerminal);
+    disconnectButton.addEventListener('click', disconnectTerminal);
+    }
+
+    bootTerminal().catch(() => {
+        const statusElement = document.getElementById('ssh-terminal-status');
+        const statusTextElement = document.getElementById('ssh-terminal-status-text');
+
+        if(statusElement) {
+            statusElement.classList.remove('is-connected', 'is-connecting');
+            statusElement.classList.add('is-disconnected');
+        }
+
+        if(statusTextElement) statusTextElement.textContent = 'Asset load error';
+    });
+</script>
