@@ -110,6 +110,8 @@ The repository includes an uninstaller for a full cleanup of this helper:
 curl -fsSL https://raw.githubusercontent.com/RaulML20/cloudpanel-terminal-helper/main/uninstall.sh | bash
 ```
 
+Do not run the installer again from inside `/opt/cloudpanel-terminal-helper` after uninstalling. The uninstaller removes that directory, so the current shell may be left pointing to a deleted working directory. Run `cd /root` first, then run the installer again.
+
 The uninstaller:
 
 - Stops and removes the PM2 process named `cloudpanel-terminal-helper`.
