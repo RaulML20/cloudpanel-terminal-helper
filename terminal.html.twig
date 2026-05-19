@@ -176,7 +176,7 @@
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 
         const params = new URLSearchParams({
-            site: siteName
+            user: siteUser
         });
 
         return protocol + '//' + window.location.hostname + ':' + terminalPort + '?' + params.toString();

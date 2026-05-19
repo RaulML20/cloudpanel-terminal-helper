@@ -165,14 +165,24 @@ function validateCloudPanelSession(req) {
     return { ok: true, sessionId };
 }
 
-function isSafeDomain(domain) {
-    return (
-        /^[a-zA-Z0-9.-]+$/.test(domain) &&
-        domain.includes('.') &&
-        !domain.includes('..') &&
-        !domain.startsWith('.') &&
-        !domain.endsWith('.')
-    );
+function getUserByUsername(username) {
+    const passwd = fs.readFileSync('/etc/passwd', 'utf8');
+
+    for(const line of passwd.split('\n')) {
+        if(!line.trim()) continue;
+
+        const parts = line.split(':');
+
+        const name = parts[0];
+        const userUid = Number(parts[2]);
+        const userGid = Number(parts[3]);
+        const home = parts[5];
+        const shell = parts[6];
+
+        if(name === username) return { username: name, uid: userUid, gid: userGid, home, shell };
+    }
+
+    return null;
 }
 
 function isSafeLinuxUsername(username) {
@@ -200,36 +210,26 @@ function getUserByUid(uid) {
 }
 
 function resolveSite(query) {
-    const domain = String(query.site || query.domain || query.siteName || '').trim().toLowerCase();
+    const username = String(query.user || '').trim();
 
-    if(!domain || !isSafeDomain(domain)) throw new Error('Invalid domain');
+    if(!username || !isSafeLinuxUsername(username)) throw new Error('Invalid username');
 
-    const siteDirectoryName = domain.split('.')[0];
-    const cwd = path.join(BASE_HOME, siteDirectoryName);
+    const user = getUserByUsername(username);
 
-    if(!fs.existsSync(cwd)) throw new Error(`Site directory not found: ${cwd}`);
+    if(!user) throw new Error(`User not found: ${username}`);
+
+    if(BLOCKED_LINUX_USERS.has(user.username)) throw new Error(`Refusing to open terminal as ${user.username}`);
+
+    const cwd = user.home;
+
+    if(!cwd || !fs.existsSync(cwd)) throw new Error(`Home directory not found for user ${user.username}`);
 
     const realBaseHome = fs.realpathSync(BASE_HOME);
     const realCwd = fs.realpathSync(cwd);
 
-    if(!realCwd.startsWith(realBaseHome + path.sep)) throw new Error('Invalid site path');
+    if(!realCwd.startsWith(realBaseHome + path.sep)) throw new Error('Invalid user home path');
 
-    const stat = fs.statSync(realCwd);
-    const user = getUserByUid(stat.uid);
-
-    if(!user) throw new Error(`Unable to resolve owner for UID ${stat.uid}`);
-
-    if(!isSafeLinuxUsername(user.username)) throw new Error('Invalid Linux username');
-
-    if(BLOCKED_LINUX_USERS.has(user.username)) throw new Error(`Refusing to open terminal as ${user.username}`);
-
-    if(!user.home || !fs.existsSync(user.home)) throw new Error(`Invalid home directory for user ${user.username}`);
-
-    const realHome = fs.realpathSync(user.home);
-
-    if(!realHome.startsWith(realBaseHome + path.sep)) throw new Error('Invalid user home path');
-
-    return { domain, cwd: realCwd, user };
+    return { domain: user.username, cwd: realCwd, user };
 }
 
 function serveAsset(req, res, pathname) {

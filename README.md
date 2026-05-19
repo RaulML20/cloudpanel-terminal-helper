@@ -160,7 +160,7 @@ The gateway uses a self-signed certificate by default. Because the browser conne
 
 `TERMINAL_ALLOWED_CLIENT_IPS` must be your public browser IP, not the VPS IP. This is the IP allowed to open the visual terminal connection.
 
-Site path detection currently expects the CloudPanel site directory to match the first label of the domain under `/home`, for example `example.com` -> `/home/example`.
+The helper resolves the site directory from the site user (`site.user`) sent by the frontend. It opens the terminal in that user's home directory and validates that it resides under the configured `TERMINAL_BASE_HOME`.
 
 CloudPanel updates may replace or modify `users.html.twig`. If the terminal UI disappears after a CloudPanel update, run this installer again with the same variables so it can copy the template again, refresh the restorable backup, and reinsert the Twig include in the expected position.
 
