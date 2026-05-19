@@ -25,6 +25,25 @@ const ALLOWED_CLIENT_IPS = new Set(
 );
 const SSL_DIR = process.env.TERMINAL_SSL_DIR || '/opt/cloudpanel-terminal-helper/ssl';
 
+    const MAX_CONCURRENT_SESSIONS = Number(process.env.TERMINAL_MAX_CONCURRENT_SESSIONS || 3);
+
+if(!Number.isInteger(MAX_CONCURRENT_SESSIONS) || MAX_CONCURRENT_SESSIONS < 1) {
+    console.error('TERMINAL_MAX_CONCURRENT_SESSIONS must be a positive integer.');
+    process.exit(1);
+}
+
+if(process.getuid && process.getuid() !== 0) {
+    console.error('CloudPanel Terminal Helper must run as root.');
+    process.exit(1);
+}
+
+if(!ALLOWED_ORIGIN) {
+    console.error('TERMINAL_ALLOWED_ORIGIN is required. Set it in .env or pass it as an environment variable.');
+    process.exit(1);
+}
+
+const activeSessions = new Map();
+
 const ASSETS = new Map([
     ['/assets/xterm.css', {
         file: path.join(__dirname, 'node_modules', '@xterm', 'xterm', 'css', 'xterm.css'),
@@ -166,7 +185,13 @@ function validateCloudPanelSession(req) {
 }
 
 function getUserByUsername(username) {
-    const passwd = fs.readFileSync('/etc/passwd', 'utf8');
+    let passwd;
+
+    try{
+        passwd = fs.readFileSync('/etc/passwd', 'utf8');
+    }catch(error) {
+        throw new Error('Unable to read user database');
+    }
 
     for(const line of passwd.split('\n')) {
         if(!line.trim()) continue;
@@ -189,26 +214,6 @@ function isSafeLinuxUsername(username) {
     return /^[a-z_][a-z0-9_-]{0,31}$/.test(username);
 }
 
-function getUserByUid(uid) {
-    const passwd = fs.readFileSync('/etc/passwd', 'utf8');
-
-    for(const line of passwd.split('\n')) {
-        if(!line.trim()) continue;
-
-        const parts = line.split(':');
-
-        const username = parts[0];
-        const userUid = Number(parts[2]);
-        const userGid = Number(parts[3]);
-        const home = parts[5];
-        const shell = parts[6];
-
-        if(userUid === uid) return {  username, uid: userUid, gid: userGid, home, shell };
-    }
-
-    return null;
-}
-
 function resolveSite(query) {
     const username = String(query.user || '').trim();
 
@@ -222,14 +227,21 @@ function resolveSite(query) {
 
     const cwd = user.home;
 
-    if(!cwd || !fs.existsSync(cwd)) throw new Error(`Home directory not found for user ${user.username}`);
+    if(!cwd) throw new Error(`Home directory not found for user ${user.username}`);
 
-    const realBaseHome = fs.realpathSync(BASE_HOME);
-    const realCwd = fs.realpathSync(cwd);
+    let realBaseHome;
+    let realCwd;
+
+    try{
+        realBaseHome = fs.realpathSync(BASE_HOME);
+        realCwd = fs.realpathSync(cwd);
+    }catch(error) {
+        throw new Error(`Unable to resolve paths: ${error.message}`);
+    }
 
     if(!realCwd.startsWith(realBaseHome + path.sep)) throw new Error('Invalid user home path');
 
-    return { domain: user.username, cwd: realCwd, user };
+    return { target: user.username, cwd: realCwd, user };
 }
 
 function serveAsset(req, res, pathname) {
@@ -293,18 +305,38 @@ wss.on('connection', (ws, req) => {
         return;
     }
 
+    const sessionId = auth.sessionId;
+    const currentCount = activeSessions.get(sessionId) || 0;
+
+    if(currentCount >= MAX_CONCURRENT_SESSIONS) {
+        reject(ws, 'Maximum concurrent terminal sessions reached');
+        return;
+    }
+
+    activeSessions.set(sessionId, currentCount + 1);
+
+    function releaseSession() {
+        const newCount = (activeSessions.get(sessionId) || 1) - 1;
+        if(newCount <= 0) activeSessions.delete(sessionId);
+        else activeSessions.set(sessionId, newCount);
+    }
+
+    ws.once('close', releaseSession);
+    ws.once('error', releaseSession);
+
     let site;
 
     try{
         const parsedUrl = url.parse(req.url, true);
         site = resolveSite(parsedUrl.query);
     }catch (error) {
+        releaseSession();
         reject(ws, error.message);
         return;
     }
 
     sendJson(ws, { type: 'output', data: `Authenticated with CloudPanel session\r\n` });
-    sendJson(ws, { type: 'output', data: `Connecting to ${site.domain}\r\n` });
+    sendJson(ws, { type: 'output', data: `Connecting to ${site.target}\r\n` });
     sendJson(ws, { type: 'output', data: `User: ${site.user.username}\r\n` });
     sendJson(ws, { type: 'output', data: `Directory: ${site.cwd}\r\n\r\n`});
 
@@ -332,6 +364,7 @@ wss.on('connection', (ws, req) => {
             }
         });
     }catch(error) {
+        releaseSession();
         reject(ws, `Unable to start terminal: ${error.message}`);
         return;
     }

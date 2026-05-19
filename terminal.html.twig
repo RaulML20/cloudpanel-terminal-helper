@@ -130,7 +130,6 @@
     const statusElement = document.getElementById('ssh-terminal-status');
     const statusTextElement = document.getElementById('ssh-terminal-status-text');
 
-    const siteId = '{{ site.id|default('')|e('js') }}';
     const siteName = '{{ site.domainName|default(site.domain|default('unknown'))|e('js') }}';
     const siteUser = '{{ site.user|default(site.siteUser|default(''))|e('js') }}';
 
@@ -162,8 +161,16 @@
 
     if(siteUser) terminal.writeln('Site user: ' + siteUser);
 
-    terminal.writeln('');
-    terminal.writeln('Click "Connect" to start a terminal session.');
+    if(!siteUser) {
+        connectButton.disabled = true;
+        setStatus('disconnected', 'No site user');
+        terminal.writeln('');
+        terminal.writeln('[error] No site user available. Terminal cannot be started.');
+    }else {
+        terminal.writeln('');
+        terminal.writeln('Click "Connect" to start a terminal session.');
+    }
+
     terminal.writeln('');
 
     function setStatus(status, label) {

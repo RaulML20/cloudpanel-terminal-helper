@@ -3,9 +3,17 @@
     "version": "1.0.0",
     "private": true,
     "description": "Unofficial external terminal helper for CloudPanel environments using WebSocket and node-pty",
+    "author": "RaulML20",
     "main": "server.js",
     "scripts": {
         "start": "node server.js"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/RaulML20/cloudpanel-terminal-helper.git"
+    },
+    "bugs": {
+        "url": "https://github.com/RaulML20/cloudpanel-terminal-helper/issues"
     },
     "dependencies": {
         "@xterm/addon-fit": "^0.10.0",
