@@ -82,6 +82,7 @@ delete_ufw_rules() {
     log "Removing UFW rules for port $TERMINAL_PORT"
 
     local before_rules="/etc/ufw/before.rules"
+    local before_rules_backup="${before_rules}.cloudpanel-terminal-helper.bak"
     if [ -f "$before_rules" ] && grep -q '^# BEGIN cloudpanel-terminal-helper' "$before_rules"; then
         log "Removing cloudpanel-terminal-helper block from $before_rules"
         local cleaned
@@ -94,6 +95,11 @@ delete_ufw_rules() {
         ' "$before_rules" > "$cleaned"
         install -m 0640 -o root -g root "$cleaned" "$before_rules"
         rm -f "$cleaned"
+    fi
+
+    if [ -f "$before_rules_backup" ]; then
+        log "Removing $before_rules_backup"
+        rm -f "$before_rules_backup"
     fi
 
     if [ -n "${TERMINAL_ALLOWED_CLIENT_IPS:-}" ]; then
@@ -158,6 +164,17 @@ remove_install_dir() {
     if [ -d "$INSTALL_DIR" ]; then
         log "Removing $INSTALL_DIR"
         rm -rf "$INSTALL_DIR"
+    fi
+
+    local parent base backup
+    parent="$(dirname "$INSTALL_DIR")"
+    base="$(basename "$INSTALL_DIR")"
+    if [ -d "$parent" ]; then
+        for backup in "$parent/$base".bak.*; do
+            [ -e "$backup" ] || continue
+            log "Removing leftover backup $backup"
+            rm -rf "$backup"
+        done
     fi
 }
 

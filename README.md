@@ -120,11 +120,11 @@ The uninstaller:
 
 - Stops and removes the PM2 process named `cloudpanel-terminal-helper`.
 - Removes the marked PM2 resurrection block from root's crontab.
-- Removes the marked `cloudpanel-terminal-helper` block from `/etc/ufw/before.rules` and any matching UFW user rule for the configured terminal port identified from `/opt/cloudpanel-terminal-helper/.env`.
+- Removes the marked `cloudpanel-terminal-helper` block from `/etc/ufw/before.rules`, deletes the `/etc/ufw/before.rules.cloudpanel-terminal-helper.bak` backup, and removes any matching UFW user rule for the configured terminal port identified from `/opt/cloudpanel-terminal-helper/.env`.
 - Restores `users.html.twig` from the helper backup when available, then removes that backup file.
 - Removes `/home/clp/htdocs/app/files/templates/Frontend/Site/terminal.html.twig`.
 - Clears the CloudPanel cache and restarts `clp-php-fpm` and `clp-nginx`.
-- Removes `/opt/cloudpanel-terminal-helper`.
+- Removes `/opt/cloudpanel-terminal-helper` and any leftover `/opt/cloudpanel-terminal-helper.bak.*` backup directories created by previous reinstalls.
 
 It does not uninstall Node.js, nvm, npm, or PM2 globally because those tools may be used by other applications on the server.
 
