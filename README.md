@@ -92,6 +92,10 @@ The installer derives `TERMINAL_CERT_CN` and `TERMINAL_CERT_SAN` from `TERMINAL_
 TERMINAL_ALLOWED_CLIENT_IPS="YOUR_PUBLIC_IP,ANOTHER_PUBLIC_IP"
 ```
 
+Each value must be a syntactically valid IPv4, IPv6, or CIDR range. Placeholder text or malformed octets are rejected before any change is made to UFW.
+
+`TERMINAL_PORT` must be a number between 1 and 65535.
+
 Full example:
 
 ```bash
@@ -118,7 +122,7 @@ The uninstaller:
 
 - Stops and removes the PM2 process named `cloudpanel-terminal-helper`.
 - Removes the marked PM2 resurrection block from root's crontab.
-- Removes the UFW rule for the configured terminal port when it can identify it from `/opt/cloudpanel-terminal-helper/.env`.
+- Removes the marked `cloudpanel-terminal-helper` block from `/etc/ufw/before.rules` and any matching UFW user rule for the configured terminal port identified from `/opt/cloudpanel-terminal-helper/.env`.
 - Restores `users.html.twig` from the helper backup when available, then removes that backup file.
 - Removes `/home/clp/htdocs/app/files/templates/Frontend/Site/terminal.html.twig`.
 - Clears the CloudPanel cache and restarts `clp-php-fpm` and `clp-nginx`.
@@ -141,7 +145,7 @@ The installer performs the following actions:
 - Creates or overwrites a single restorable backup at `/home/clp/htdocs/app/files/templates/Frontend/Site/users.html.twig.cloudpanel-terminal-helper.bak` before modifying `users.html.twig`. The backup has the helper include removed so it can be used by the uninstaller.
 - Inserts or updates a Twig include in `users.html.twig`, directly after the FTP users `card card-table` block inside `site-content`, so the helper UI appears as a sibling card in the expected site view position.
 - Sets `terminal.html.twig`, the modified `users.html.twig`, and the backup file to owner `clp:clp` and mode `770` by default.
-- Adds a UFW allow rule for the configured port and authorized IPs only when UFW is already installed.
+- Adds a persistent UFW allow rule for the configured port and authorized IPs by writing a marked block into `/etc/ufw/before.rules`, so the rule survives changes made later from the CloudPanel firewall UI (which rewrites `user.rules`). A timestamped backup of `before.rules` is created as `before.rules.cloudpanel-terminal-helper.bak`, and if `ufw reload` fails after the change the installer restores the backup automatically and aborts. This step is skipped when UFW is not installed.
 - Starts the helper with PM2 and saves the PM2 process list.
 - Adds a marked `pm2 resurrect` block to root's crontab only when cron is already available.
 - Clears `/home/clp/htdocs/app/files/var/cache`.

@@ -34,6 +34,11 @@ if ! echo "$TERMINAL_PORT" | grep -Eq '^[0-9]+$'; then
     exit 1
 fi
 
+if [ "$TERMINAL_PORT" -lt 1 ] || [ "$TERMINAL_PORT" -gt 65535 ]; then
+    echo "TERMINAL_PORT must be between 1 and 65535 (got: $TERMINAL_PORT)." >&2
+    exit 1
+fi
+
 if ! echo "$TERMINAL_MAX_CONCURRENT_SESSIONS" | grep -Eq '^[0-9]+$'; then
     echo "TERMINAL_MAX_CONCURRENT_SESSIONS must be a number." >&2
     exit 1
@@ -45,6 +50,58 @@ if [ -z "$TERMINAL_ALLOWED_CLIENT_IPS" ]; then
     echo "TERMINAL_ALLOWED_CLIENT_IPS=\"YOUR_PUBLIC_IP\" bash install.sh" >&2
     exit 1
 fi
+
+is_valid_ip() {
+    local value="$1"
+    local addr="${value%%/*}"
+    local mask=""
+    if [ "$value" != "$addr" ]; then
+        mask="${value#*/}"
+    fi
+
+    if echo "$addr" | grep -Eq '^[0-9]+(\.[0-9]+){3}$'; then
+        local IFS=.
+        local -a octets=($addr)
+        local o
+        for o in "${octets[@]}"; do
+            if [ -z "$o" ] || [ "${#o}" -gt 3 ] || [ "$o" -gt 255 ]; then
+                return 1
+            fi
+            if [ "${#o}" -gt 1 ] && [ "${o:0:1}" = "0" ]; then
+                return 1
+            fi
+        done
+        if [ -n "$mask" ]; then
+            echo "$mask" | grep -Eq '^[0-9]+$' || return 1
+            [ "$mask" -ge 0 ] && [ "$mask" -le 32 ] || return 1
+        fi
+        return 0
+    fi
+
+    if echo "$addr" | grep -q ':' && echo "$addr" | grep -Eq '^[0-9a-fA-F:]+$'; then
+        if [ -n "$mask" ]; then
+            echo "$mask" | grep -Eq '^[0-9]+$' || return 1
+            [ "$mask" -ge 0 ] && [ "$mask" -le 128 ] || return 1
+        fi
+        return 0
+    fi
+
+    return 1
+}
+
+IFS=',' read -ra _ips_check <<< "$TERMINAL_ALLOWED_CLIENT_IPS"
+for _ip in "${_ips_check[@]}"; do
+    _ip="${_ip#"${_ip%%[![:space:]]*}"}"
+    _ip="${_ip%"${_ip##*[![:space:]]}"}"
+    [ -z "$_ip" ] && continue
+    if ! is_valid_ip "$_ip"; then
+        echo "TERMINAL_ALLOWED_CLIENT_IPS contains an invalid value: '$_ip'" >&2
+        echo "Use real IPv4/IPv6 addresses or CIDR ranges, comma separated. Example:" >&2
+        echo "TERMINAL_ALLOWED_CLIENT_IPS=\"203.0.113.45\" bash install.sh" >&2
+        exit 1
+    fi
+done
+unset _ips_check _ip
 
 log() {
     printf '\n[%s] %s\n' "$APP_NAME" "$*"
@@ -411,7 +468,18 @@ configure_firewall() {
     install -m 0640 -o root -g root "$new_rules" "$before_rules"
     rm -f "$rules_block" "$new_rules"
 
-    ufw reload || true
+    if ! ufw reload >/dev/null 2>&1; then
+        log "ufw reload failed, restoring $before_rules from backup"
+        install -m 0640 -o root -g root "${before_rules}.cloudpanel-terminal-helper.bak" "$before_rules"
+        if ! ufw reload; then
+            echo "UFW reload still failing after restoring $before_rules backup." >&2
+            echo "Inspect 'ufw status' and /etc/ufw/before.rules before retrying the installer." >&2
+            exit 1
+        fi
+        echo "before.rules was restored; the persistent UFW rule was NOT applied." >&2
+        echo "Re-run the installer once the conflict in $before_rules is resolved." >&2
+        exit 1
+    fi
 }
 
 start_pm2() {
