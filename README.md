@@ -63,11 +63,11 @@ You can also run it as a one-liner:
 curl -fsSL https://raw.githubusercontent.com/RaulML20/cloudpanel-terminal-helper/main/install.sh | TERMINAL_ALLOWED_CLIENT_IPS="YOUR_PUBLIC_IP" bash
 ```
 
-If you fork the repository or use a different branch:
+To install from a specific branch:
 
 ```bash
-curl -sS https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/install.sh -o install.sh
-TERMINAL_ALLOWED_CLIENT_IPS="YOUR_PUBLIC_IP" GITHUB_REPO="YOUR_USER/YOUR_REPO" REPO_BRANCH="main" bash install.sh
+curl -sS https://raw.githubusercontent.com/RaulML20/cloudpanel-terminal-helper/BRANCH_NAME/install.sh -o install.sh
+TERMINAL_ALLOWED_CLIENT_IPS="YOUR_PUBLIC_IP" REPO_BRANCH="BRANCH_NAME" bash install.sh
 ```
 
 ## Useful Variables
@@ -78,7 +78,6 @@ TERMINAL_ALLOWED_CLIENT_IPS="YOUR_PUBLIC_IP"
 TERMINAL_ALLOWED_ORIGIN="https://YOUR_VPS_IP_OR_DOMAIN:8443"
 TERMINAL_PORT="7867"
 TERMINAL_MAX_CONCURRENT_SESSIONS="3"
-GITHUB_REPO="RaulML20/cloudpanel-terminal-helper"
 REPO_BRANCH="main"
 ```
 
@@ -104,7 +103,6 @@ TERMINAL_PUBLIC_HOST="YOUR_VPS_IP_OR_DOMAIN" \
   TERMINAL_ALLOWED_CLIENT_IPS="YOUR_PUBLIC_IP" \
   TERMINAL_PORT="7867" \
   TERMINAL_MAX_CONCURRENT_SESSIONS="3" \
-  GITHUB_REPO="RaulML20/cloudpanel-terminal-helper" \
   bash install.sh
 ```
 

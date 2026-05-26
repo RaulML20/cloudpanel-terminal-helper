@@ -3,9 +3,9 @@ set -euo pipefail
 
 APP_NAME="${APP_NAME:-cloudpanel-terminal-helper}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/cloudpanel-terminal-helper}"
-GITHUB_REPO="${GITHUB_REPO:-RaulML20/cloudpanel-terminal-helper}"
+GITHUB_REPO="RaulML20/cloudpanel-terminal-helper"
 REPO_BRANCH="${REPO_BRANCH:-main}"
-ARCHIVE_URL="${ARCHIVE_URL:-https://github.com/$GITHUB_REPO/archive/refs/heads/$REPO_BRANCH.tar.gz}"
+ARCHIVE_URL="https://github.com/$GITHUB_REPO/archive/refs/heads/$REPO_BRANCH.tar.gz"
 NODE_VERSION="${NODE_VERSION:-24}"
 TERMINAL_PORT="${TERMINAL_PORT:-7867}"
 TERMINAL_HOST="${TERMINAL_HOST:-0.0.0.0}"
