@@ -355,14 +355,62 @@ configure_firewall() {
         return
     fi
 
-    log "Configuring UFW"
-    IFS=',' read -ra ips <<< "$TERMINAL_ALLOWED_CLIENT_IPS"
-    for ip in "${ips[@]}"; do
-        ip="${ip#"${ip%%[![:space:]]*}"}"
-        ip="${ip%"${ip##*[![:space:]]}"}"
-        [ -z "$ip" ] && continue
-        ufw allow from "$ip" to any port "$TERMINAL_PORT" proto tcp comment 'SSH Terminal' || true
-    done
+    local before_rules="/etc/ufw/before.rules"
+
+    if [ ! -f "$before_rules" ]; then
+        log "Skipping UFW allow rule because $before_rules was not found"
+        return
+    fi
+
+    log "Configuring UFW (writing persistent rules in $before_rules)"
+
+    local rules_block
+    rules_block="$(mktemp)"
+    {
+        echo "# BEGIN cloudpanel-terminal-helper"
+        IFS=',' read -ra ips <<< "$TERMINAL_ALLOWED_CLIENT_IPS"
+        for ip in "${ips[@]}"; do
+            ip="${ip#"${ip%%[![:space:]]*}"}"
+            ip="${ip%"${ip##*[![:space:]]}"}"
+            [ -z "$ip" ] && continue
+            echo "-A ufw-before-input -p tcp -s $ip --dport $TERMINAL_PORT -j ACCEPT"
+        done
+        echo "# END cloudpanel-terminal-helper"
+    } > "$rules_block"
+
+    cp -a "$before_rules" "${before_rules}.cloudpanel-terminal-helper.bak"
+
+    local new_rules
+    new_rules="$(mktemp)"
+    awk -v block_file="$rules_block" '
+        BEGIN {
+            in_block = 0
+            inserted = 0
+            while ((getline line < block_file) > 0) {
+                block[++block_count] = line
+            }
+            close(block_file)
+        }
+        /^# BEGIN cloudpanel-terminal-helper/ { in_block = 1; next }
+        /^# END cloudpanel-terminal-helper/ { in_block = 0; next }
+        in_block { next }
+        /^\*filter/ { in_filter = 1 }
+        /^COMMIT$/ && in_filter && !inserted {
+            for (i = 1; i <= block_count; i++) print block[i]
+            inserted = 1
+            in_filter = 0
+        }
+        { print }
+        END {
+            if (!inserted) {
+                for (i = 1; i <= block_count; i++) print block[i]
+            }
+        }
+    ' "$before_rules" > "$new_rules"
+
+    install -m 0640 -o root -g root "$new_rules" "$before_rules"
+    rm -f "$rules_block" "$new_rules"
+
     ufw reload || true
 }
 

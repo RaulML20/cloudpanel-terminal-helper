@@ -81,6 +81,21 @@ delete_ufw_rules() {
 
     log "Removing UFW rules for port $TERMINAL_PORT"
 
+    local before_rules="/etc/ufw/before.rules"
+    if [ -f "$before_rules" ] && grep -q '^# BEGIN cloudpanel-terminal-helper' "$before_rules"; then
+        log "Removing cloudpanel-terminal-helper block from $before_rules"
+        local cleaned
+        cleaned="$(mktemp)"
+        awk '
+            /^# BEGIN cloudpanel-terminal-helper/ { in_block = 1; next }
+            /^# END cloudpanel-terminal-helper/ { in_block = 0; next }
+            in_block { next }
+            { print }
+        ' "$before_rules" > "$cleaned"
+        install -m 0640 -o root -g root "$cleaned" "$before_rules"
+        rm -f "$cleaned"
+    fi
+
     if [ -n "${TERMINAL_ALLOWED_CLIENT_IPS:-}" ]; then
         IFS=',' read -ra ips <<< "$TERMINAL_ALLOWED_CLIENT_IPS"
         for ip in "${ips[@]}"; do
