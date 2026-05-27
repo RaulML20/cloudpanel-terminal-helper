@@ -31,7 +31,7 @@ ssh root@yourIpAddress
 Prepare the system in the same style as the CloudPanel installer:
 
 ```bash
-apt update && apt -y upgrade && apt -y install curl sudo
+apt update && apt -y upgrade && apt -y install curl sudo python3 make g++
 ```
 
 Recommended command:
@@ -44,7 +44,7 @@ curl -fsSL https://raw.githubusercontent.com/RaulML20/cloudpanel-terminal-helper
   bash
 ```
 
-If `npm install` fails while building `node-pty`, install the native build tools and run the installer again:
+The installer requires the native build tools above because `node-pty` is compiled during `npm install`. If you skipped them, install them and run the installer again:
 
 ```bash
 apt -y install python3 make g++
@@ -120,7 +120,7 @@ The uninstaller:
 
 - Stops and removes the PM2 process named `cloudpanel-terminal-helper`.
 - Removes the marked PM2 resurrection block from root's crontab.
-- Removes the marked `cloudpanel-terminal-helper` block from `/etc/ufw/before.rules`, deletes the `/etc/ufw/before.rules.cloudpanel-terminal-helper.bak` backup, and removes any matching UFW user rule for the configured terminal port identified from `/opt/cloudpanel-terminal-helper/.env`.
+- Removes the marked `cloudpanel-terminal-helper` block from `/etc/ufw/before.rules` and `/etc/ufw/before6.rules`, deletes the matching helper backups, and removes any matching UFW user rule for the configured terminal port identified from `/opt/cloudpanel-terminal-helper/.env`.
 - Restores `users.html.twig` from the helper backup when available, then removes that backup file.
 - Removes `/home/clp/htdocs/app/files/templates/Frontend/Site/terminal.html.twig`.
 - Clears the CloudPanel cache and restarts `clp-php-fpm` and `clp-nginx`.
@@ -136,14 +136,14 @@ The installer performs the following actions:
 - Installs Node.js 24 with nvm using the official nvm installer.
 - Installs PM2 globally with npm.
 - Downloads this helper from GitHub into `/opt/cloudpanel-terminal-helper`; if that directory already exists, it is moved to a timestamped backup before installing a fresh copy.
-- Installs the npm dependencies from this repository.
+- Installs the npm dependencies from this repository using `npm ci` and the committed `package-lock.json` when available.
 - Writes `/opt/cloudpanel-terminal-helper/.env` with runtime configuration.
 - Creates a 5-year self-signed certificate in `/opt/cloudpanel-terminal-helper/ssl` if one does not already exist, using `TERMINAL_CERT_CN` and `TERMINAL_CERT_SAN`.
 - Copies `terminal.html.twig` into `/home/clp/htdocs/app/files/templates/Frontend/Site/terminal.html.twig`; the helper serves local `@xterm/xterm` assets from npm under `/assets/...` instead of loading them from a CDN.
 - Creates or overwrites a single restorable backup at `/home/clp/htdocs/app/files/templates/Frontend/Site/users.html.twig.cloudpanel-terminal-helper.bak` before modifying `users.html.twig`. The backup has the helper include removed so it can be used by the uninstaller.
 - Inserts or updates a Twig include in `users.html.twig`, directly after the FTP users `card card-table` block inside `site-content`, so the helper UI appears as a sibling card in the expected site view position.
 - Sets `terminal.html.twig`, the modified `users.html.twig`, and the backup file to owner `clp:clp` and mode `770` by default.
-- Adds a persistent UFW allow rule for the configured port and authorized IPs by writing a marked block into `/etc/ufw/before.rules`, so the rule survives changes made later from the CloudPanel firewall UI (which rewrites `user.rules`). A timestamped backup of `before.rules` is created as `before.rules.cloudpanel-terminal-helper.bak`, and if `ufw reload` fails after the change the installer restores the backup automatically and aborts. This step is skipped when UFW is not installed.
+- Adds persistent UFW allow rules for the configured port and authorized IPs by writing marked blocks into `/etc/ufw/before.rules` for IPv4 and `/etc/ufw/before6.rules` for IPv6, so the rules survive changes made later from the CloudPanel firewall UI (which rewrites `user.rules`). Helper backups are created next to the edited files, and if `ufw reload` fails after the change the installer restores the backups automatically and aborts. This step is skipped when UFW is not installed.
 - Starts the helper with PM2 and saves the PM2 process list.
 - Adds a marked `pm2 resurrect` block to root's crontab only when cron is already available.
 - Clears `/home/clp/htdocs/app/files/var/cache`.

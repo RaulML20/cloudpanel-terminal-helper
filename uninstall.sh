@@ -81,26 +81,30 @@ delete_ufw_rules() {
 
     log "Removing UFW rules for port $TERMINAL_PORT"
 
-    local before_rules="/etc/ufw/before.rules"
-    local before_rules_backup="${before_rules}.cloudpanel-terminal-helper.bak"
-    if [ -f "$before_rules" ] && grep -q '^# BEGIN cloudpanel-terminal-helper' "$before_rules"; then
-        log "Removing cloudpanel-terminal-helper block from $before_rules"
-        local cleaned
-        cleaned="$(mktemp)"
-        awk '
-            /^# BEGIN cloudpanel-terminal-helper/ { in_block = 1; next }
-            /^# END cloudpanel-terminal-helper/ { in_block = 0; next }
-            in_block { next }
-            { print }
-        ' "$before_rules" > "$cleaned"
-        install -m 0640 -o root -g root "$cleaned" "$before_rules"
-        rm -f "$cleaned"
-    fi
+    local -a rule_files
+    local rule_file rule_file_backup
+    rule_files=(/etc/ufw/before.rules /etc/ufw/before6.rules)
+    for rule_file in "${rule_files[@]}"; do
+        rule_file_backup="${rule_file}.cloudpanel-terminal-helper.bak"
+        if [ -f "$rule_file" ] && grep -q '^# BEGIN cloudpanel-terminal-helper' "$rule_file"; then
+            log "Removing cloudpanel-terminal-helper block from $rule_file"
+            local cleaned
+            cleaned="$(mktemp)"
+            awk '
+                /^# BEGIN cloudpanel-terminal-helper/ { in_block = 1; next }
+                /^# END cloudpanel-terminal-helper/ { in_block = 0; next }
+                in_block { next }
+                { print }
+            ' "$rule_file" > "$cleaned"
+            install -m 0640 -o root -g root "$cleaned" "$rule_file"
+            rm -f "$cleaned"
+        fi
 
-    if [ -f "$before_rules_backup" ]; then
-        log "Removing $before_rules_backup"
-        rm -f "$before_rules_backup"
-    fi
+        if [ -f "$rule_file_backup" ]; then
+            log "Removing $rule_file_backup"
+            rm -f "$rule_file_backup"
+        fi
+    done
 
     if [ -n "${TERMINAL_ALLOWED_CLIENT_IPS:-}" ]; then
         IFS=',' read -ra ips <<< "$TERMINAL_ALLOWED_CLIENT_IPS"

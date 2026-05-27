@@ -17,15 +17,14 @@ const SESSION_COOKIE_NAME = process.env.TERMINAL_SESSION_COOKIE_NAME || 'cloudpa
 const MAX_SESSION_AGE_SECONDS = Number(process.env.TERMINAL_MAX_SESSION_AGE_SECONDS || (24 * 60 * 60));
 
 const ALLOWED_ORIGIN = process.env.TERMINAL_ALLOWED_ORIGIN || '';
-const ALLOWED_CLIENT_IPS = new Set(
+const RAW_ALLOWED_CLIENT_IPS =
     (process.env.TERMINAL_ALLOWED_CLIENT_IPS || '')
         .split(',')
         .map((ip) => ip.trim())
-        .filter(Boolean)
-);
+        .filter(Boolean);
 const SSL_DIR = process.env.TERMINAL_SSL_DIR || '/opt/cloudpanel-terminal-helper/ssl';
 
-    const MAX_CONCURRENT_SESSIONS = Number(process.env.TERMINAL_MAX_CONCURRENT_SESSIONS || 3);
+const MAX_CONCURRENT_SESSIONS = Number(process.env.TERMINAL_MAX_CONCURRENT_SESSIONS || 3);
 
 if(!Number.isInteger(MAX_CONCURRENT_SESSIONS) || MAX_CONCURRENT_SESSIONS < 1) {
     console.error('TERMINAL_MAX_CONCURRENT_SESSIONS must be a positive integer.');
@@ -39,6 +38,105 @@ if(process.getuid && process.getuid() !== 0) {
 
 if(!ALLOWED_ORIGIN) {
     console.error('TERMINAL_ALLOWED_ORIGIN is required. Set it in .env or pass it as an environment variable.');
+    process.exit(1);
+}
+
+function parseIpv4(ip) {
+    if(!/^[0-9]+(\.[0-9]+){3}$/.test(ip)) return null;
+
+    const octets = ip.split('.').map((part) => Number(part));
+    if(octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) return null;
+
+    return octets.reduce((value, octet) => (value << 8n) + BigInt(octet), 0n);
+}
+
+function parseIpv6(ip) {
+    let address = ip;
+    const zoneIndex = address.indexOf('%');
+    if(zoneIndex !== -1) address = address.slice(0, zoneIndex);
+    if(!address.includes(':')) return null;
+
+    if(address.includes('.')) {
+        const lastColon = address.lastIndexOf(':');
+        const ipv4Value = parseIpv4(address.slice(lastColon + 1));
+        if(ipv4Value === null) return null;
+
+        const high = Number((ipv4Value >> 16n) & 0xffffn).toString(16);
+        const low = Number(ipv4Value & 0xffffn).toString(16);
+        address = `${address.slice(0, lastColon)}:${high}:${low}`;
+    }
+
+    const compressedParts = address.split('::');
+    if(compressedParts.length > 2) return null;
+
+    const left = compressedParts[0] ? compressedParts[0].split(':') : [];
+    const right = compressedParts.length === 2 && compressedParts[1] ? compressedParts[1].split(':') : [];
+    if(left.includes('') || right.includes('')) return null;
+
+    const missing = 8 - left.length - right.length;
+    if((compressedParts.length === 1 && missing !== 0) || missing < 0) return null;
+
+    const groups = [
+        ...left,
+        ...Array(compressedParts.length === 2 ? missing : 0).fill('0'),
+        ...right
+    ];
+    if(groups.length !== 8) return null;
+
+    let value = 0n;
+    for(const group of groups) {
+        if(!/^[0-9a-fA-F]{1,4}$/.test(group)) return null;
+        value = (value << 16n) + BigInt(parseInt(group, 16));
+    }
+
+    return value;
+}
+
+function parseIp(ip) {
+    const ipv4 = parseIpv4(ip);
+    if(ipv4 !== null) return { version: 4, value: ipv4, bits: 32 };
+
+    const ipv6 = parseIpv6(ip);
+    if(ipv6 !== null) return { version: 6, value: ipv6, bits: 128 };
+
+    return null;
+}
+
+function parseAllowedClientRule(entry) {
+    const [rawIp, rawPrefix, extra] = entry.split('/');
+    if(extra !== undefined || !rawIp || rawPrefix === '') return null;
+
+    const parsed = parseIp(rawIp);
+    if(!parsed) return null;
+
+    const prefix = rawPrefix === undefined ? parsed.bits : Number(rawPrefix);
+    if(!Number.isInteger(prefix) || prefix < 0 || prefix > parsed.bits) return null;
+
+    return {
+        version: parsed.version,
+        value: parsed.value,
+        bits: parsed.bits,
+        prefix,
+        source: entry
+    };
+}
+
+function isIpAllowed(clientIp) {
+    const parsed = parseIp(clientIp);
+    if(!parsed) return false;
+
+    return ALLOWED_CLIENT_RULES.some((rule) => {
+        if(rule.version !== parsed.version) return false;
+
+        const shift = BigInt(rule.bits - rule.prefix);
+        return (parsed.value >> shift) === (rule.value >> shift);
+    });
+}
+
+const ALLOWED_CLIENT_RULES = RAW_ALLOWED_CLIENT_IPS.map(parseAllowedClientRule);
+const invalidAllowedClientRule = ALLOWED_CLIENT_RULES.findIndex((rule) => rule === null);
+if(invalidAllowedClientRule !== -1) {
+    console.error(`Invalid TERMINAL_ALLOWED_CLIENT_IPS value: ${RAW_ALLOWED_CLIENT_IPS[invalidAllowedClientRule]}`);
     process.exit(1);
 }
 
@@ -115,11 +213,11 @@ function normalizeClientIp(ip) {
 function validateClientIp(req) {
     const clientIp = normalizeClientIp(req.socket.remoteAddress);
 
-    if(ALLOWED_CLIENT_IPS.size === 0) {
+    if(ALLOWED_CLIENT_RULES.length === 0) {
         return { ok: false, reason: 'No allowed client IPs configured' };
     }
 
-    if(!ALLOWED_CLIENT_IPS.has(clientIp)) {
+    if(!isIpAllowed(clientIp)) {
         return { ok: false, reason: `IP not allowed: ${clientIp || 'unknown'}` };
     }
 
@@ -315,7 +413,12 @@ wss.on('connection', (ws, req) => {
 
     activeSessions.set(sessionId, currentCount + 1);
 
+    let sessionReleased = false;
+
     function releaseSession() {
+        if(sessionReleased) return;
+        sessionReleased = true;
+
         const newCount = (activeSessions.get(sessionId) || 1) - 1;
         if(newCount <= 0) activeSessions.delete(sessionId);
         else activeSessions.set(sessionId, newCount);

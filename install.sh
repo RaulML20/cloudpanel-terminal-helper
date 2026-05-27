@@ -44,19 +44,13 @@ if ! echo "$TERMINAL_MAX_CONCURRENT_SESSIONS" | grep -Eq '^[0-9]+$'; then
     exit 1
 fi
 
-if [ -z "$TERMINAL_ALLOWED_CLIENT_IPS" ]; then
-    echo "TERMINAL_ALLOWED_CLIENT_IPS is required." >&2
-    echo "Use the public IP address that will access the browser terminal, for example:" >&2
-    echo "TERMINAL_ALLOWED_CLIENT_IPS=\"YOUR_PUBLIC_IP\" bash install.sh" >&2
-    exit 1
-fi
-
 is_valid_ip() {
     local value="$1"
     local addr="${value%%/*}"
     local mask=""
     if [ "$value" != "$addr" ]; then
         mask="${value#*/}"
+        [ -n "$mask" ] || return 1
     fi
 
     if echo "$addr" | grep -Eq '^[0-9]+(\.[0-9]+){3}$'; then
@@ -64,10 +58,13 @@ is_valid_ip() {
         local -a octets=($addr)
         local o
         for o in "${octets[@]}"; do
-            if [ -z "$o" ] || [ "${#o}" -gt 3 ] || [ "$o" -gt 255 ]; then
+            if [ -z "$o" ] || [ "${#o}" -gt 3 ]; then
                 return 1
             fi
             if [ "${#o}" -gt 1 ] && [ "${o:0:1}" = "0" ]; then
+                return 1
+            fi
+            if [ "$o" -gt 255 ]; then
                 return 1
             fi
         done
@@ -79,6 +76,7 @@ is_valid_ip() {
     fi
 
     if echo "$addr" | grep -q ':' && echo "$addr" | grep -Eq '^[0-9a-fA-F:]+$'; then
+        is_valid_ipv6_address "$addr" || return 1
         if [ -n "$mask" ]; then
             echo "$mask" | grep -Eq '^[0-9]+$' || return 1
             [ "$mask" -ge 0 ] && [ "$mask" -le 128 ] || return 1
@@ -89,19 +87,91 @@ is_valid_ip() {
     return 1
 }
 
-IFS=',' read -ra _ips_check <<< "$TERMINAL_ALLOWED_CLIENT_IPS"
-for _ip in "${_ips_check[@]}"; do
-    _ip="${_ip#"${_ip%%[![:space:]]*}"}"
-    _ip="${_ip%"${_ip##*[![:space:]]}"}"
-    [ -z "$_ip" ] && continue
-    if ! is_valid_ip "$_ip"; then
-        echo "TERMINAL_ALLOWED_CLIENT_IPS contains an invalid value: '$_ip'" >&2
-        echo "Use real IPv4/IPv6 addresses or CIDR ranges, comma separated. Example:" >&2
-        echo "TERMINAL_ALLOWED_CLIENT_IPS=\"203.0.113.45\" bash install.sh" >&2
+is_valid_ipv6_part() {
+    local part="$1"
+    local -a groups
+    local group
+
+    if [ -z "$part" ]; then
+        echo 0
+        return 0
+    fi
+
+    if [[ "$part" == :* || "$part" == *: ]]; then
+        return 1
+    fi
+
+    IFS=':' read -ra groups <<< "$part"
+    for group in "${groups[@]}"; do
+        if ! [[ "$group" =~ ^[0-9a-fA-F]{1,4}$ ]]; then
+            return 1
+        fi
+    done
+
+    echo "${#groups[@]}"
+}
+
+is_valid_ipv6_address() {
+    local addr="$1"
+    local left right left_count right_count total_count
+
+    [[ "$addr" == *:* ]] || return 1
+    [[ "$addr" != *:::* ]] || return 1
+
+    if [[ "$addr" == *::* ]]; then
+        right="${addr#*::}"
+        [[ "$right" != *::* ]] || return 1
+        left="${addr%%::*}"
+
+        left_count="$(is_valid_ipv6_part "$left")" || return 1
+        right_count="$(is_valid_ipv6_part "$right")" || return 1
+        total_count=$((left_count + right_count))
+        [ "$total_count" -le 7 ] || return 1
+        return 0
+    fi
+
+    total_count="$(is_valid_ipv6_part "$addr")" || return 1
+    [ "$total_count" -eq 8 ]
+}
+
+normalize_allowed_client_ips() {
+    local -a ips
+    local ip normalized count
+    normalized=""
+    count=0
+
+    IFS=',' read -ra ips <<< "$TERMINAL_ALLOWED_CLIENT_IPS"
+    for ip in "${ips[@]}"; do
+        ip="${ip#"${ip%%[![:space:]]*}"}"
+        ip="${ip%"${ip##*[![:space:]]}"}"
+        [ -z "$ip" ] && continue
+
+        if ! is_valid_ip "$ip"; then
+            echo "TERMINAL_ALLOWED_CLIENT_IPS contains an invalid value: '$ip'" >&2
+            echo "Use real IPv4/IPv6 addresses or CIDR ranges, comma separated. Example:" >&2
+            echo "TERMINAL_ALLOWED_CLIENT_IPS=\"203.0.113.45\" bash install.sh" >&2
+            exit 1
+        fi
+
+        if [ -n "$normalized" ]; then
+            normalized="${normalized},${ip}"
+        else
+            normalized="$ip"
+        fi
+        count=$((count + 1))
+    done
+
+    if [ "$count" -eq 0 ]; then
+        echo "TERMINAL_ALLOWED_CLIENT_IPS is required." >&2
+        echo "Use the public IP address that will access the browser terminal, for example:" >&2
+        echo "TERMINAL_ALLOWED_CLIENT_IPS=\"YOUR_PUBLIC_IP\" bash install.sh" >&2
         exit 1
     fi
-done
-unset _ips_check _ip
+
+    TERMINAL_ALLOWED_CLIENT_IPS="$normalized"
+}
+
+normalize_allowed_client_ips
 
 log() {
     printf '\n[%s] %s\n' "$APP_NAME" "$*"
@@ -112,6 +182,40 @@ require_command() {
         echo "Missing required command: $1" >&2
         exit 1
     fi
+}
+
+require_native_build_tools() {
+    local -a missing_tools
+    local tool
+    missing_tools=()
+
+    for tool in python3 make g++; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            missing_tools+=("$tool")
+        fi
+    done
+
+    if [ "${#missing_tools[@]}" -gt 0 ]; then
+        echo "Missing native build tools required by node-pty: ${missing_tools[*]}" >&2
+        echo "Install them first, for example:" >&2
+        echo "apt -y install python3 make g++" >&2
+        exit 1
+    fi
+}
+
+quote_env_value() {
+    local value="$1"
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    value="${value//\$/\\\$}"
+    value="${value//\`/\\\`}"
+    printf '"%s"' "$value"
+}
+
+write_env_var() {
+    local name="$1"
+    local value="$2"
+    printf '%s=%s\n' "$name" "$(quote_env_value "$value")"
 }
 
 check_cloudpanel() {
@@ -149,8 +253,22 @@ make_subject_alt_name() {
 
     if echo "$host" | grep -Eq '^[0-9]+(\.[0-9]+){3}$'; then
         echo "IP:$host"
+    elif [[ "$host" == *:* ]] && is_valid_ipv6_address "$host"; then
+        echo "IP:$host"
     else
         echo "DNS:$host"
+    fi
+}
+
+format_url_host() {
+    local host="$1"
+
+    if [[ "$host" == \[*\] ]]; then
+        echo "$host"
+    elif [[ "$host" == *:* ]]; then
+        echo "[$host]"
+    else
+        echo "$host"
     fi
 }
 
@@ -215,7 +333,12 @@ fetch_app() {
 install_node_dependencies() {
     log "Installing npm dependencies"
     cd "$INSTALL_DIR"
-    npm install
+
+    if [ -f package-lock.json ]; then
+        npm ci --omit=dev
+    else
+        npm install --omit=dev
+    fi
 }
 
 write_env_file() {
@@ -230,7 +353,7 @@ write_env_file() {
     fi
 
     if [ -z "$TERMINAL_ALLOWED_ORIGIN" ]; then
-        TERMINAL_ALLOWED_ORIGIN="https://${detected_host}:8443"
+        TERMINAL_ALLOWED_ORIGIN="https://$(format_url_host "$detected_host"):8443"
     fi
 
     if [ -z "$TERMINAL_CERT_CN" ]; then
@@ -242,16 +365,16 @@ write_env_file() {
     fi
 
     log "Writing runtime configuration"
-    cat > "$INSTALL_DIR/.env" <<EOF
-TERMINAL_PORT=$TERMINAL_PORT
-TERMINAL_HOST=$TERMINAL_HOST
-TERMINAL_SSL_DIR=$TERMINAL_SSL_DIR
-TERMINAL_ALLOWED_ORIGIN=$TERMINAL_ALLOWED_ORIGIN
-TERMINAL_ALLOWED_CLIENT_IPS=$TERMINAL_ALLOWED_CLIENT_IPS
-TERMINAL_CERT_CN=$TERMINAL_CERT_CN
-TERMINAL_CERT_SAN=$TERMINAL_CERT_SAN
-TERMINAL_MAX_CONCURRENT_SESSIONS=$TERMINAL_MAX_CONCURRENT_SESSIONS
-EOF
+    {
+        write_env_var "TERMINAL_PORT" "$TERMINAL_PORT"
+        write_env_var "TERMINAL_HOST" "$TERMINAL_HOST"
+        write_env_var "TERMINAL_SSL_DIR" "$TERMINAL_SSL_DIR"
+        write_env_var "TERMINAL_ALLOWED_ORIGIN" "$TERMINAL_ALLOWED_ORIGIN"
+        write_env_var "TERMINAL_ALLOWED_CLIENT_IPS" "$TERMINAL_ALLOWED_CLIENT_IPS"
+        write_env_var "TERMINAL_CERT_CN" "$TERMINAL_CERT_CN"
+        write_env_var "TERMINAL_CERT_SAN" "$TERMINAL_CERT_SAN"
+        write_env_var "TERMINAL_MAX_CONCURRENT_SESSIONS" "$TERMINAL_MAX_CONCURRENT_SESSIONS"
+    } > "$INSTALL_DIR/.env"
 }
 
 create_certificate() {
@@ -401,45 +524,20 @@ JS
     log "Restorable backup updated: $CLOUDPANEL_USERS_TEMPLATE_BACKUP"
 }
 
-configure_firewall() {
-    if [ -z "$TERMINAL_ALLOWED_CLIENT_IPS" ]; then
-        log "Skipping UFW allow rule because TERMINAL_ALLOWED_CLIENT_IPS is empty"
-        return
-    fi
+is_ipv6_value() {
+    local addr="${1%%/*}"
+    [[ "$addr" == *:* ]]
+}
 
-    if ! command -v ufw >/dev/null 2>&1; then
-        log "Skipping UFW allow rule because ufw is not installed"
-        return
-    fi
-
-    local before_rules="/etc/ufw/before.rules"
-
-    if [ ! -f "$before_rules" ]; then
-        log "Skipping UFW allow rule because $before_rules was not found"
-        return
-    fi
-
-    log "Configuring UFW (writing persistent rules in $before_rules)"
-
-    local rules_block
-    rules_block="$(mktemp)"
-    {
-        echo "# BEGIN cloudpanel-terminal-helper"
-        IFS=',' read -ra ips <<< "$TERMINAL_ALLOWED_CLIENT_IPS"
-        for ip in "${ips[@]}"; do
-            ip="${ip#"${ip%%[![:space:]]*}"}"
-            ip="${ip%"${ip##*[![:space:]]}"}"
-            [ -z "$ip" ] && continue
-            echo "-A ufw-before-input -p tcp -s $ip --dport $TERMINAL_PORT -j ACCEPT"
-        done
-        echo "# END cloudpanel-terminal-helper"
-    } > "$rules_block"
-
-    cp -a "$before_rules" "${before_rules}.cloudpanel-terminal-helper.bak"
-
+install_ufw_rules_block() {
+    local rules_file="$1"
+    local block_file="$2"
     local new_rules
+
+    cp -a "$rules_file" "${rules_file}.cloudpanel-terminal-helper.bak"
+
     new_rules="$(mktemp)"
-    awk -v block_file="$rules_block" '
+    awk -v block_file="$block_file" '
         BEGIN {
             in_block = 0
             inserted = 0
@@ -463,21 +561,106 @@ configure_firewall() {
                 for (i = 1; i <= block_count; i++) print block[i]
             }
         }
-    ' "$before_rules" > "$new_rules"
+    ' "$rules_file" > "$new_rules"
 
-    install -m 0640 -o root -g root "$new_rules" "$before_rules"
-    rm -f "$rules_block" "$new_rules"
+    install -m 0640 -o root -g root "$new_rules" "$rules_file"
+    rm -f "$new_rules"
+}
+
+configure_firewall() {
+    if [ -z "$TERMINAL_ALLOWED_CLIENT_IPS" ]; then
+        log "Skipping UFW allow rule because TERMINAL_ALLOWED_CLIENT_IPS is empty"
+        return
+    fi
+
+    if ! command -v ufw >/dev/null 2>&1; then
+        log "Skipping UFW allow rule because ufw is not installed"
+        return
+    fi
+
+    log "Configuring UFW persistent allow rules"
+
+    local before_rules="/etc/ufw/before.rules"
+    local before6_rules="/etc/ufw/before6.rules"
+    local ipv4_rules_block ipv6_rules_block ip ipv4_count ipv6_count
+    local -a ips changed_rule_files
+    ipv4_rules_block="$(mktemp)"
+    ipv6_rules_block="$(mktemp)"
+    ipv4_count=0
+    ipv6_count=0
+    changed_rule_files=()
+
+    {
+        echo "# BEGIN cloudpanel-terminal-helper"
+        echo "# END cloudpanel-terminal-helper"
+    } > "$ipv4_rules_block"
+
+    {
+        echo "# BEGIN cloudpanel-terminal-helper"
+        echo "# END cloudpanel-terminal-helper"
+    } > "$ipv6_rules_block"
+
+    IFS=',' read -ra ips <<< "$TERMINAL_ALLOWED_CLIENT_IPS"
+    for ip in "${ips[@]}"; do
+        ip="${ip#"${ip%%[![:space:]]*}"}"
+        ip="${ip%"${ip##*[![:space:]]}"}"
+        [ -z "$ip" ] && continue
+
+        if is_ipv6_value "$ip"; then
+            awk -v rule="-A ufw6-before-input -p tcp -s $ip --dport $TERMINAL_PORT -j ACCEPT" '
+                /^# END cloudpanel-terminal-helper$/ { print rule }
+                { print }
+            ' "$ipv6_rules_block" > "${ipv6_rules_block}.new"
+            mv "${ipv6_rules_block}.new" "$ipv6_rules_block"
+            ipv6_count=$((ipv6_count + 1))
+        else
+            awk -v rule="-A ufw-before-input -p tcp -s $ip --dport $TERMINAL_PORT -j ACCEPT" '
+                /^# END cloudpanel-terminal-helper$/ { print rule }
+                { print }
+            ' "$ipv4_rules_block" > "${ipv4_rules_block}.new"
+            mv "${ipv4_rules_block}.new" "$ipv4_rules_block"
+            ipv4_count=$((ipv4_count + 1))
+        fi
+    done
+
+    if [ "$ipv4_count" -gt 0 ]; then
+        if [ -f "$before_rules" ]; then
+            install_ufw_rules_block "$before_rules" "$ipv4_rules_block"
+            changed_rule_files+=("$before_rules")
+        else
+            log "Skipping IPv4 UFW allow rules because $before_rules was not found"
+        fi
+    fi
+
+    if [ "$ipv6_count" -gt 0 ]; then
+        if [ -f "$before6_rules" ]; then
+            install_ufw_rules_block "$before6_rules" "$ipv6_rules_block"
+            changed_rule_files+=("$before6_rules")
+        else
+            log "Skipping IPv6 UFW allow rules because $before6_rules was not found"
+        fi
+    fi
+
+    rm -f "$ipv4_rules_block" "$ipv6_rules_block"
+
+    if [ "${#changed_rule_files[@]}" -eq 0 ]; then
+        log "Skipping UFW reload because no persistent rule file was changed"
+        return
+    fi
 
     if ! ufw reload >/dev/null 2>&1; then
-        log "ufw reload failed, restoring $before_rules from backup"
-        install -m 0640 -o root -g root "${before_rules}.cloudpanel-terminal-helper.bak" "$before_rules"
+        log "ufw reload failed, restoring UFW rule files from backup"
+        local changed_rule_file
+        for changed_rule_file in "${changed_rule_files[@]}"; do
+            install -m 0640 -o root -g root "${changed_rule_file}.cloudpanel-terminal-helper.bak" "$changed_rule_file"
+        done
         if ! ufw reload; then
-            echo "UFW reload still failing after restoring $before_rules backup." >&2
-            echo "Inspect 'ufw status' and /etc/ufw/before.rules before retrying the installer." >&2
+            echo "UFW reload still failing after restoring rule file backups." >&2
+            echo "Inspect 'ufw status', /etc/ufw/before.rules, and /etc/ufw/before6.rules before retrying the installer." >&2
             exit 1
         fi
-        echo "before.rules was restored; the persistent UFW rule was NOT applied." >&2
-        echo "Re-run the installer once the conflict in $before_rules is resolved." >&2
+        echo "UFW rule files were restored; the persistent UFW rule was NOT applied." >&2
+        echo "Re-run the installer once the conflict in UFW rule files is resolved." >&2
         exit 1
     fi
 }
@@ -548,6 +731,7 @@ require_command curl
 require_command tar
 require_command openssl
 check_cloudpanel
+require_native_build_tools
 
 install_node
 expose_node_commands
@@ -562,6 +746,7 @@ configure_pm2_cron
 restart_cloudpanel
 
 log "Installation completed"
-echo "Gateway: https://$(detect_public_host):$TERMINAL_PORT"
+final_public_host="$(detect_public_host)"
+echo "Gateway: https://$(format_url_host "$final_public_host"):$TERMINAL_PORT"
 echo "Allowed origin: $TERMINAL_ALLOWED_ORIGIN"
 echo "Allowed client IPs: $TERMINAL_ALLOWED_CLIENT_IPS"
